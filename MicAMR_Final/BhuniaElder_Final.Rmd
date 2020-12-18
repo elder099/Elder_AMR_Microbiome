@@ -1,0 +1,602 @@
+---
+title: "PUBH 7445 Final Project: Investigating associations in microbiome composition and Antimicrobial Resistance (AMR) genes of cow metagenomic data"
+author: "Jesse Elder and Minu Bhunia"
+date: "12/18/2020"
+output: pdf_document
+fontsize: 11pt
+---
+
+\section{Abstract:}
+
+Antimicrobial resistance is a complex phenomenon that can lead to dire consequences in human and animal health. In an effort to elucidate relationships between the microbiome and antimicrobial resistance this project compared four metagenomic studies of cow rumens. These relationships were studied using Bayesian networks. Additionally, relationships between bacterial abundance and study design were investigated. It was found that Prevotella was the dominant bacterial genus in all studies other than Hess. In contrast, Tetracyclines were the dominant class of AMR genes in all studies other than Shi. In both analyses, these trends are recapitulated with both PCA and k-means clustering. Regarding the relationships between the microbiome and AMR, it was found that the presence of one type of AMR often coincided with other types. Moreover, the presence of Metronidazole resistance as well as the genus Ruminococcus correlated strongly with increased Tetracycline resistance. From these analyses, it was concluded that bacterial abundance and antimicrobial resistance often cluster together based on study design.
+
+\section{Introduction:}
+
+Antimicrobial resistance is a complex phenomenon that can lead to dire consequences in human and animal health [1]. One way to study this is to investigate the rumen of cattle and other livestock. Rumen comes from the first stomach of these types of animals and can be used to investigate the microbiome in depth. Luckily, with the use of Next Generation sequencing, analysis of rumen samples has become increasingly affordable and fast [2].
+
+There are many publicly available metagenomic datasets from rumen-associated samples. This project compared the four studies Hess et. al 2011; Wallace et. al 2015; Shi et. al 2014; and Stewart et. al 2018 in order to elucidate relationships between the microbiome and antimicrobial resistance [3,4,5,2]. The Stewart study was based in Scotland using Scottish beef cattle. Hess used switchgrass as feed which is unusual. Wallace used Aberdeen-Angus or Limousin cross who had a concentrate-based or forage-concentrate based diet. Lastly, Shi used Sheep instead of cows. It is interesting to note that since the studies conducted by Hess and Shi are somewhat different from the others it makes sense for these studies to stand out from the rest in our investigation. 
+
+Using these datasets, the laboratory of Dr. Noelle Noyes has compiled bacteria and gene count data for common ruminants. We used these compiled files (microbiome_Genus_Normalized and AMR_Gene_Normalized) for our investigations. 
+
+\section{Data and Methods:}
+
+Data courtesy of Dr. Noelle Noyes. The investigated datasets included rumen microbiome/bacteria (microbiome_Genus_Normalized) and antimicrobial resistance gene composition  (AMR_Gene_Normalized) data. Each of these files are formatted with all sample IDs from each study (Hess et. al 2011; Wallace et. al 2015; Shi et. al 2014; and Stewart et. al 2018) and the counts of each aligned read corresponding to either a bacterial genome or an antimicrobial resistance gene. The AMR_Gene_Normalized file had a few more complexities with the inclusion of Group, Mechanism, and Class information of each identified antimicrobial gene.
+
+The analysis of these data was performed as follows. We planned a broad analysis to find any associations between bacteria and AMR in the microbiome, clustering between study samples, and constructing some type of classification with that information. We performed principal component analysis (PCA), multidimensional scaling (MDS), and t-distributed stochastic neighbor embedding (tSNE) for dimensionality reduction; K-means clustering for classification, and Bayesian network analysis to determine AMR-microbiome relationships. 
+
+\section{Results:}
+
+```{r, include=FALSE}
+library(ggplot2)
+library(ggfortify)
+library(vegan)
+library(MASS)
+library(tidyverse)
+```
+
+\subsection{Microbiome PCA}
+```{r, include=FALSE}
+Mic<-read.csv("microbiome_Genus_Normalized.csv",row.names = 1)
+
+genus_t<-t(Mic)
+
+Micauthors<-ifelse(substr(rownames(genus_t),1,7)=="stewart","Stewart",
+               ifelse(substr(rownames(genus_t),1,3)=="shi","Shi", 
+                      ifelse(substr(rownames(genus_t),1,7)=="wallace","Wallace","Hess")))
+Micauthors<-data.frame(Authors=Micauthors)
+```
+
+```{r}
+MicPCA<-prcomp(genus_t,scale=FALSE)
+autoplot(MicPCA,data=Micauthors,colour="Authors") + ggtitle("PCA of Microbiome by Author") +
+  theme(plot.title = element_text(hjust = 0.5,vjust=3))
+```
+
+\subsection{AMR data loading and cleaning}
+```{r, include=FALSE}
+###########AMR section
+
+AMR<-read.csv("AMR_Gene_Normalized.csv")
+#head(AMR)
+
+###Class
+AMRsubclass<-AMR[,c(2,5:dim(AMR)[2])]
+#head(AMRsubclass)
+AMRcleanclass<-aggregate(. ~ class,AMRsubclass, FUN=sum)
+#head(AMRcleanclass)
+
+rownames(AMRcleanclass)<-AMRcleanclass$class
+AMRcleanclass<-AMRcleanclass[,2:dim(AMRcleanclass)[2]]
+#head(AMRcleanclass)
+
+###Mechanism
+AMRsubmech<-AMR[,c(3,5:dim(AMR)[2])]
+#head(AMRsubmech)
+AMRcleanmech<-aggregate(. ~ mechanism,AMRsubmech, FUN=sum)
+#head(AMRcleanmech)
+
+rownames(AMRcleanmech)<-AMRcleanmech$mechanism
+AMRcleanmech<-AMRcleanmech[,2:dim(AMRcleanmech)[2]]
+
+
+###Group
+AMRsubgroup<-AMR[,c(4,5:dim(AMR)[2])]
+
+AMRcleangroup<-aggregate(. ~ group,AMRsubgroup, FUN=sum)
+#head(AMRcleangroup)
+
+rownames(AMRcleangroup)<-AMRcleangroup$group
+AMRcleangroup<-AMRcleangroup[,2:dim(AMRcleangroup)[2]]
+
+
+class_t<-t(AMRcleanclass) %>% data.frame()
+mech_t<-t(AMRcleanmech) %>% data.frame()
+group_t<-t(AMRcleangroup) %>% data.frame()
+
+
+#Turn the rownames into the actual studies they came from
+AMRauthors<-ifelse(substr(rownames(class_t),1,7)=="stewart","Stewart",
+               ifelse(substr(rownames(class_t),1,3)=="shi","Shi", 
+                      ifelse(substr(rownames(class_t),1,7)=="wallace","Wallace","Hess")))
+
+AMRauthors<-data.frame(Authors=AMRauthors)
+```
+
+\subsection{PCA on AMR}
+```{r}
+PCAclass=prcomp(class_t)
+autoplot(PCAclass, data=AMRauthors,colour="Authors")+ ggtitle("PCA of AMR Class by Author")+
+  theme(plot.title = element_text(hjust = 0.5,vjust=3))
+
+PCAgroup=prcomp(group_t)
+autoplot(PCAgroup, data=AMRauthors, colour="Authors")+ ggtitle("PCA of AMR Group by Author")+
+  theme(plot.title = element_text(hjust = 0.5,vjust=3))
+
+PCAmech=prcomp(mech_t)
+autoplot(PCAmech, data=AMRauthors, colour="Authors")+ ggtitle("PCA of AMR Mechanism by Author")+
+  theme(plot.title = element_text(hjust = 0.5,vjust=3))
+```
+
+\textbf{Figure 1:} The PCA plots converts the correlations or lack of among the samples into a 2D graph. The samples that are highly correlated will cluster together. From our PCA plots without K means, there does not seem to be any clear clustering. Although Hess and Shi seem to be away from the other points.
+
+\subsection{Kmeans clustering on AMR Class data only}
+```{r, include=FALSE}
+library(factoextra)
+```
+
+```{r}
+##########Kmeans
+
+kenny<-kmeans(class_t,4)     #Kmeans cluster into 4 clusters
+#aggregate(class_t,by=list(kenny$cluster),FUN=mean)     #Check out the means across the clusters
+
+#fviz_cluster(kenny,data=class_t,geom="point",xlim=c(-2,2),ylim=c(-2,2),scale=FALSE) + theme(plot.title = element_text(hjust = 0.5,vjust=3))  #Try out fviz for hulls
+
+AMRauthorClust<-data.frame(class_t,Authors=AMRauthors,clust=as.factor(kenny$cluster))     #Combine AMR data, AMR authors, and cluster number
+
+#Final Figure
+#Shape is the cluster it belongs to
+#Colour is the Study it's from
+AMRClassplot<-autoplot(PCAclass,data=AMRauthorClust,colour="Authors",shape="clust",size=2) + 
+  ggtitle("PCA of AMR Class by\n Author and 4 Kmeans Clusters") + 
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5,vjust=3)) + 
+  scale_y_continuous(limits=c(-0.6,0.15)) + scale_x_continuous(limits=c(-0.3,0.17)) +
+  theme(plot.margin=unit(c(1,1,1.5,1.2),"cm"), axis.line = element_line(color="black"))
+AMRClassplot
+
+
+kenny1<-kmeans(class_t,3)                     #Now try it with 3 clusters
+
+AMRauthorClust<-cbind(AMRauthorClust,clust3=as.factor(kenny1$cluster))      #Merge old dataframe with 3 cluster data
+
+autoplot(PCAclass,data=AMRauthorClust,colour="Authors",shape="clust3")+ ggtitle("PCA of AMR Class by\n Author and 3 Kmeans Clusters")        #Final plot w/3 clusters
+```
+
+\textbf{Figure 2:} A plot of the first two principal components of AMR class data. K-means clusters (4 clusters) are also labeled along with coloring the "correct" grouping by study. Principal components showed some notable clustering -- Hess and Shi were distinct -- but k-means clustering had limited predictive power -- only Shi was correctly labeled.
+
+\subsection{Kmeans clustering on Microbiome}
+```{r}
+kennyMic<-kmeans(genus_t,4)
+Micauthorframe<-cbind(genus_t,Authors=Micauthors,clust=as.factor(kennyMic$cluster))
+Micplot<-autoplot(MicPCA,data=Micauthorframe,colour="Authors",shape="clust",size=2) + 
+  ggtitle("PCA of Microbiome by\n Author and Kmeans Cluster") + 
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5,vjust=3)) + 
+  scale_y_continuous(limits=c(-0.6,0.15)) + scale_x_continuous(limits=c(-0.3,0.17)) +
+  theme(plot.margin=unit(c(1,1,1.5,1.2),"cm"), axis.line = element_line(color="black")) 
+Micplot
+```
+
+\textbf{Figure 3:} A plot of the first two principal components of bacterial genera count data. K-means clusters (4 clusters) are also labeled along with coloring the "correct" grouping by author. Again, principal components showed some notable clustering -- in this case only Shi was distinct -- but k-means clustering had limited predictive power -- only Hess was correctly labeled.
+
+\subsection{MDS}
+```{r}
+#microbiome
+micro_dist<-dist(genus_t)
+micro<-cmdscale(micro_dist)
+x<-micro[,1]
+y<-micro[,2]
+p<-data.frame(x,y,Micauthors)
+ggplot(p, aes(x=x, y=y, color=Micauthors$Authors)) + geom_point()+ggtitle("MDS of Microbiome")+
+  theme(plot.title = element_text(hjust = 0.5,vjust=3)) +xlab("MDS1") +ylab("MDS2")
+
+#AMR
+#distance matrix, MDS, plot
+#class
+c_dist<-dist(class_t)
+c<-cmdscale(c_dist)
+x<-c[,1]
+y<-c[,2]
+p<-data.frame(x,y,AMRauthors)
+ggplot(p, aes(x=x, y=y, color=AMRauthors$Authors)) + geom_point()+ggtitle("MDS of AMR Class")+
+  theme(plot.title = element_text(hjust = 0.5,vjust=3))+xlab("MDS1") +ylab("MDS2")
+
+#mechanism
+m_dist<-dist(mech_t)
+m<-cmdscale(m_dist)
+x<-m[,1]
+y<-m[,2]
+p<-data.frame(x,y,AMRauthors)
+ggplot(p, aes(x=x, y=y, color=AMRauthors$Authors)) + geom_point()+ggtitle("MDS of AMR Mechanism")+
+  theme(plot.title = element_text(hjust = 0.5,vjust=3))+xlab("MDS1") +ylab("MDS2")
+
+#group
+g_dist<-dist(group_t)
+g<-cmdscale(g_dist)
+x<-g[,1]
+y<-g[,2]
+p<-data.frame(x,y,AMRauthors)
+ggplot(p, aes(x=x, y=y, color=AMRauthors$Authors)) + geom_point()+ggtitle("MDS of AMR Group")+
+  theme(plot.title = element_text(hjust = 0.5,vjust=3))+xlab("MDS1") +ylab("MDS2")
+```
+
+\textbf{Figure 4:} Plot of multidimensional scaling (MDS) using the microbiome data shows Hess clusters alone, but still is spread out. 
+
+\textbf{Figure 5:} Plot of multidimensional scaling (MDS) using the AMR class data shows Hess clusters alone, but still is spread out. Shi also clusters alone.
+
+\subsection{tSne on Microbiome Data}
+```{r, include=FALSE}
+library(tsne)
+#Let's remake the AMR authors dataframe for convenience
+AMRauthors<-ifelse(substr(rownames(class_t),1,7)=="stewart","Stewart",
+               ifelse(substr(rownames(class_t),1,3)=="shi","Shi", 
+                      ifelse(substr(rownames(class_t),1,7)=="wallace","Wallace","Hess")))
+
+AMRauthors<-data.frame(Authors=AMRauthors)
+
+###########tSNE
+disty<-dist(class_t)    #Make a distance matrix out of the transposed AMR data
+cool<-rainbow(length(unique(AMRauthors$Authors)))
+names(cool)=unique(AMRauthors$Authors)
+Sneeze<-tsne(class_t)
+SneezeDist<-tsne(disty)
+
+#tsne w/o distance matrix (Acceptable)
+#plot(Sneeze,col=cool[AMRauthors$Authors],pch=11,main="tSNE of AMR Class",xlab="tSNE 1",ylab="tSNE 2")
+#legend("topright",legend=c("hess","shi","stewart","wallace"),col = cool,pch=1)
+```
+
+```{r}
+#tsne w/distance matrix (Also acceptable)
+plot(SneezeDist,col=cool[AMRauthors$Authors],pch=11,main="tSNE of AMR Class Sample Distance",xlab="tSNE 1",ylab="tSNE 2")
+legend("topright",legend=c("hess","shi","stewart","wallace"),col = cool,pch=1)
+```
+
+\textbf{Figure 6:} Plot of t-distributed stochastic neighbor embedding (tSNE) using microbiome data shows that Shi clusters alone.
+
+\subsection{tSne on AMR Data}
+```{r, include=FALSE}
+#AMR #group
+disty<-dist(group_t)
+#authors is already a data frame
+cool<-rainbow(length(unique(AMRauthors$Authors)))
+names(cool)=unique(AMRauthors$Authors)
+Sneeze<-tsne(disty)
+```
+
+```{r}
+plot(Sneeze,col=cool[AMRauthors$Authors],pch=11,xlab="tSNE 1",ylab="tSNE 2")
+legend("bottomright",legend=c("hess","shi","stewart","wallace"),col = cool,pch=1)
+```
+
+```{r, include=FALSE}
+#mech
+disty_mech<-dist(mech_t)
+cool<-rainbow(length(unique(AMRauthors$Authors)))
+names(cool)=unique(AMRauthors$Authors)
+Sneeze<-tsne(disty_mech)
+```
+
+```{r}
+plot(Sneeze,col=cool[AMRauthors$Authors],pch=11,xlab="tSNE 1",ylab="tSNE 2")
+legend("bottomright",legend=c("hess","shi","stewart","wallace"),col = cool,pch=1)
+```
+
+```{r, include=FALSE}
+#class
+disty_class<-dist(class_t)
+cool<-rainbow(length(unique(AMRauthors$Authors)))
+names(cool)=unique(AMRauthors$Authors)
+Sneeze<-tsne(disty_class)
+```
+
+```{r}
+plot(Sneeze,col=cool[AMRauthors$Authors],pch=11,xlab="tSNE 1",ylab="tSNE 2")
+legend("bottomright",legend=c("hess","shi","stewart","wallace"),col = cool,pch=1)
+```
+
+\textbf{Figure 7:} Plots of t-distributed stochastic neighbor embedding (tSNE) using AMR class, mechanism, and group data shows that Shi always clusters alone.
+
+\subsection{Relative Abundance}
+```{r, include=FALSE}
+library(tidyverse)
+library(RColorBrewer)
+
+###Reading in Data again
+Mic<-read.csv("microbiome_Genus_Normalized.csv",row.names = 1)
+tMic<-t(Mic)
+```
+
+```{r, include=FALSE}
+###Making Top 10 Relative Abundance Data for Microbiome
+#Proportion for each genus for each sample
+RelAbsMic=as.data.frame(prop.table(as.matrix(Mic),margin=2))
+summy<-rowSums(RelAbsMic)           #Sum proportions of each genus row -- to find out which genus is most frequently high abundance
+RelSum<-sort(summy,TRUE)            #Put genus abundances in descending order
+
+df<-data.frame(SumOrder=RelSum)     #Put sorted genus abundances in dataframe
+df$Rows<-rownames(df)               #Add this column in for merging
+Mic$Rows<-rownames(Mic)             #Make this for merging next
+
+#Merge the two datasets
+Reldf<-left_join(df,Mic,by = c("Rows" = "Rows"))      #This way, RelAbsMic is in the same descending order as RelSum (df)
+rownames(Reldf)<-Reldf$Rows                           #Add back in rownames for clarity
+ReldfSub<-Reldf[1:10,3:dim(Reldf)[2]]                 #Only the top 10 most abundant, only column-wise relative abundance data
+
+###Final Product
+MicRelAbsClean<-as.data.frame(prop.table(as.matrix(ReldfSub),margin=2))
+###Final Product
+
+#this can be used when needed
+#write.csv(MicRelAbsClean,"TopTen.csv")
+
+#order the data frame by author
+MicRelAbsClean = MicRelAbsClean[ , order(names(MicRelAbsClean))]
+MicRelAbsClean=MicRelAbsClean[,c(12:ncol(MicRelAbsClean),1:11)] #put Hess at the end
+```
+
+```{r}
+coul <- brewer.pal(10, "Spectral")
+par(oma=c(1,1,1,10))
+barplot(as.matrix(MicRelAbsClean), col=coul,xlab="Rumen Studies",xaxt="n",cex.lab=1,ylab="Relative Abundance",main="Relative Abundance of Genera by Study")
+legend(123,0.9,legend=rownames(as.matrix(MicRelAbsClean)),col = coul,box.lty=0,lty=1,lwd=3,xpd=NA,cex=0.75)
+```
+
+\textbf{Figure 8:} Relative abundance was calculated using the microbiome count data. From this, the top 10 most abundant bacterial genera were extracted and plotted over all the samples. Provetella was the most abundant in most of the samples, but Hess seemed to have Fibrobacter as the most abundant genera. Therefore this sample group was appended to the right end of the figure for clarity.
+
+```{r, include=FALSE}
+###Redefine our AMR data - similar to how we did it before
+AMRsubclass<-AMR[,c(2,5:dim(AMR)[2])]
+#head(AMRsubclass)
+AMRcleanclass<-aggregate(. ~ class,AMRsubclass, FUN=sum)
+#head(AMRcleanclass)
+
+rownames(AMRcleanclass)<-AMRcleanclass$class
+AMRcleanclass<-AMRcleanclass[,2:dim(AMRcleanclass)[2]]
+#head(AMRcleanclass)
+
+###Mechanism
+AMRsubmech<-AMR[,c(3,5:dim(AMR)[2])]
+#head(AMRsubmech)
+AMRcleanmech<-aggregate(. ~ mechanism,AMRsubmech, FUN=sum)
+#head(AMRcleanmech)
+
+rownames(AMRcleanmech)<-AMRcleanmech$mechanism
+AMRcleanmech<-AMRcleanmech[,2:dim(AMRcleanmech)[2]]
+
+###Group
+AMRsubgroup<-AMR[,c(4,5:dim(AMR)[2])]
+
+AMRcleangroup<-aggregate(. ~ group,AMRsubgroup, FUN=sum)
+#head(AMRcleangroup)
+
+rownames(AMRcleangroup)<-AMRcleangroup$group
+AMRcleangroup<-AMRcleangroup[,2:dim(AMRcleangroup)[2]]
+
+###Making Top 10 Relative Abundance Data for each AMR
+#class
+#Proportion for each class for each sample
+RelAbsClass=as.data.frame(prop.table(as.matrix(AMRcleanclass),margin=2))
+RelAbsClass[is.na(RelAbsClass)]<-0     #Change all the NAs to 0
+summy<-rowSums(RelAbsClass)           #Sum proportions of each class row -- to find out which class is most frequently high abundance
+RelSum<-sort(summy,TRUE)            #Put class abundances in descending order
+
+df<-data.frame(SumOrder=RelSum)     #Put sorted class abundances in dataframe
+df$Rows<-rownames(df)               #Add this column in for merging
+AMRcleanclass$Rows<-rownames(AMRcleanclass)
+
+#Merge the two datasets
+Reldf<-left_join(df,AMRcleanclass,by = c("Rows" = "Rows"))      #This way, RelAbsClass is in the same descending order as RelSum (df)
+rownames(Reldf)<-Reldf$Rows                                 #Add back in rownames for clarity
+ReldfSub<-Reldf[1:10,3:dim(Reldf)[2]]         #Only the top 10 most abundant, only column-wise relative abundance data
+
+###Final Product
+ClassRelAbsClean<-as.data.frame(prop.table(as.matrix(ReldfSub),margin=2))
+ClassRelAbsClean[is.na(ClassRelAbsClean)]<-0     #Change all the NAs which are still present due to division to 0
+
+#if column sum is zero remove the column from the data - meaning this resistance type was not found
+ClassRelAbsClean <- ClassRelAbsClean[,colSums(ClassRelAbsClean) != 0]
+
+#order the data frame by author
+ClassRelAbsClean = ClassRelAbsClean[ , order(names(ClassRelAbsClean))]
+ClassRelAbsClean=ClassRelAbsClean[,c(1:11,36:ncol(ClassRelAbsClean),12:35)] #put Shi at the end
+```
+
+```{r}
+#class
+coul <- brewer.pal(10, "Spectral") #change the color order to make it easier to see
+coul<-c(coul[7], coul[5], coul[4], coul[1], coul[2], coul[3], coul[6], coul[8:10])
+par(oma=c(1,1,1,10))
+barplot(as.matrix(ClassRelAbsClean), col=coul,xlab="Rumen Studies",xaxt="n",cex.lab=1,ylab="Relative Abundance",main="Relative Abundance of AMR Class by Study")
+legend(123,0.9,legend=rownames(as.matrix(ClassRelAbsClean)),col = coul, box.lty=0, lty=1, lwd=3, xpd=NA, cex=0.75)
+```
+
+\textbf{Figure 9a:} Relative abundance was calculated using the AMR Class count data. From this, the top 10 most abundant AMR classes were extracted and plotted over all the samples. Tetracyclines were the msot abundant for most studies, but not in the Shi studies. Therefore this sample group was appended to the right end of the figure for clarity.
+
+```{r, include=FALSE}
+#mech
+#Proportion for each mechanism for each sample
+RelAbsMech=as.data.frame(prop.table(as.matrix(AMRcleanmech),margin=2))
+RelAbsMech[is.na(RelAbsMech)]<-0     #Change all the NAs to 0
+summy<-rowSums(RelAbsMech)           #Sum proportions of each mech row -- to find out which mech is most frequently high abundance
+RelSum<-sort(summy,TRUE)            #Put mech abundances in descending order
+
+df<-data.frame(SumOrder=RelSum)     #Put sorted mech abundances in dataframe
+df$Rows<-rownames(df)               #Add this column in for merging
+AMRcleanmech$Rows<-rownames(AMRcleanmech)
+
+#Merge the two datasets
+Reldf<-left_join(df,AMRcleanmech,by = c("Rows" = "Rows"))      #This way, RelAbsClass is in the same descending order as RelSum (df)
+rownames(Reldf)<-Reldf$Rows                                 #Add back in rownames for clarity
+ReldfSub<-Reldf[1:10,3:dim(Reldf)[2]]         #Only the top 10 most abundant, only column-wise relative abundance data
+
+###Final Product
+MechRelAbsClean<-as.data.frame(prop.table(as.matrix(ReldfSub),margin=2))
+MechRelAbsClean[is.na(MechRelAbsClean)]<-0     #Change all the NAs which are still present due to division to 0
+
+#if column sum is zero remove the column from the data - meaning this resistance type was not found
+MechRelAbsClean <- MechRelAbsClean[,colSums(MechRelAbsClean) != 0]
+
+#order the data frame by author
+MechRelAbsClean = MechRelAbsClean[ , order(names(MechRelAbsClean))]
+MechRelAbsClean=MechRelAbsClean[,c(1:11,36:ncol(MechRelAbsClean),12:35)] #put Shi at the end
+```
+
+```{r}
+#mech
+coul <- brewer.pal(10, "Spectral") #change the color order to make it easier to see
+coul<-c(coul[7], coul[5], coul[4], coul[1], coul[2], coul[3], coul[6], coul[8:10])
+par(oma=c(1,1,1,10))
+barplot(as.matrix(MechRelAbsClean), col=coul,xlab="Rumen Studies",xaxt="n",cex.lab=1,ylab="Relative Abundance",main="Relative Abundance of AMR Mechanism by Study")
+legend(123,0.9,legend=rownames(as.matrix(MechRelAbsClean)),col = coul, box.lty=0, lty=1, lwd=3, xpd=NA, cex=0.5)
+```
+
+\textbf{Figure 9b:} Relative abundance was calculated using the AMR Mechanism count data. From this, the top 10 most abundant AMR mechanisms were extracted and plotted over all the samples. Tetracycline resistance ribosomal protection protein was the msot abundant for most studies, but not in the Shi studies. Therefore this sample group was appended to the right end of the figure for clarity.
+
+```{r, include=FALSE}
+#group
+#Proportion for each group for each sample
+RelAbsGroup=as.data.frame(prop.table(as.matrix(AMRcleangroup),margin=2))
+RelAbsGroup[is.na(RelAbsGroup)]<-0     #Change all the NAs to 0
+summy<-rowSums(RelAbsGroup)           #Sum proportions of each group row -- to find out which group is most frequently high abundance
+RelSum<-sort(summy,TRUE)            #Put group abundances in descending order
+
+
+df<-data.frame(SumOrder=RelSum)     #Put sorted group abundances in dataframe
+df$Rows<-rownames(df)               #Add this column in for merging
+AMRcleangroup$Rows<-rownames(AMRcleangroup)
+
+#Merge the two datasets
+Reldf<-left_join(df,AMRcleangroup, by = c("Rows" = "Rows"))      #This way, RelAbsClass is in the same descending order as RelSum (df)
+rownames(Reldf)<-Reldf$Rows                                 #Add back in rownames for clarity
+ReldfSub<-Reldf[1:10,3:dim(Reldf)[2]]         #Only the top 10 most abundant, only column-wise relative abundance data
+
+###Final Product
+GroupRelAbsClean<-as.data.frame(prop.table(as.matrix(ReldfSub),margin=2))
+GroupRelAbsClean[is.na(GroupRelAbsClean)]<-0     #Change all the NAs which are still present due to division to 0
+
+#if column sum is zero remove the column from the data - meaning this resistance type was not found
+GroupRelAbsClean <- GroupRelAbsClean[,colSums(GroupRelAbsClean) != 0]
+
+#order the data frame by author
+GroupRelAbsClean = GroupRelAbsClean[ , order(names(GroupRelAbsClean))]
+GroupRelAbsClean=GroupRelAbsClean[,c(1:11,36:ncol(GroupRelAbsClean),12:35)] #put Shi at the end
+```
+
+```{r}
+#group
+coul <- brewer.pal(10, "Spectral") #change the color order to make it easier to see
+coul<-c(coul[7], coul[5], coul[4], coul[1], coul[2], coul[3], coul[6], coul[8:10])
+par(oma=c(1,1,1,10))
+barplot(as.matrix(GroupRelAbsClean), col=coul, xlab="Rumen Studies",xaxt="n",cex.lab=1,ylab="Relative Abundance",main="Relative Abundance of AMR Group by Study")
+legend(123,0.9,legend=rownames(as.matrix(GroupRelAbsClean)),col = coul, box.lty=0, lty=1, lwd=3, xpd=NA, cex=0.75)
+```
+
+\textbf{Figure 9c:} Relative abundance was calculated using the AMR Group count data. From this, the top 10 most abundant AMR groups were extracted and plotted over all the samples. TETW and TETQ were among the msot abundant groups for most studies, but not in the Shi studies. Therefore this sample group was appended to the right end of the figure for clarity.
+
+```{r, include=FALSE}
+#File merging and data cleaning for Bayesian Network construction
+###AMR dataset
+AMR<-read.csv("AMR_Gene_Normalized.csv")
+#head(AMR)
+AMRsub<-AMR[,c(2,5:dim(AMR)[2])]  #Only keep the Class variable and beyond
+
+AMRclean<-aggregate(. ~ class,AMRsub, FUN=sum)  #Pull all the Classes together
+#head(AMRclean)
+
+rownames(AMRclean)<-AMRclean$class
+AMRclean<-AMRclean[,2:dim(AMRclean)[2]]
+#colSums(prop.table(as.matrix(AMRclean),margin=2))
+
+ReldfSub<-read.csv("TopTen.csv",row.names=1) #Load in Mic Dataset
+top20<-as.data.frame(t(ReldfSub))
+tAMR<-as.data.frame(t(AMRclean))
+
+propAMR<-as.data.frame(prop.table(as.matrix(tAMR),margin=1))
+propAMR[is.na(propAMR)]<-0     #Change all the NAs to 0
+
+###Add Row Names for Merge
+propAMR$Rows=rownames(propAMR)
+top20$Rows=rownames(top20)
+
+###Merge & Clean the dataset
+Mega<-left_join(as.data.frame(propAMR),as.data.frame(top20),by="Rows")  #Merge our two datasets!
+rownames(Mega)<-Mega$Rows
+Mega<-Mega[,!(names(Mega)=="Rows")]
+
+#rowSums(Mega)   #They should all be 2 (if nonzero for all AMR types) or 1 (if 0 for all AMR types)
+dim(Mega)
+
+write.csv(Mega,"MergedAMRMicData.csv")
+#now top 10 with AMR and micro ready to use for Bayes
+```
+
+
+\subsection{Baysian Network}
+```{r, include=FALSE}
+ReldfSub<-read.csv("MergedAMRMicData.csv",row.names=1)
+top20<-t(ReldfSub)
+
+library(bnlearn)
+library(parallel)
+library(data.table)
+library(readxl)
+library(Rgraphviz)
+library(Rmpfr)
+
+counts <- as.data.frame(ReldfSub)
+#colnames(counts)[19:28]
+counts.dedup <- dedup(as.data.frame(top20), .95, debug = FALSE)
+```
+
+```{r, include=FALSE}
+set.seed(42)
+
+dag.hybrid.group <- hc(counts)
+
+boot.hc.hybrid.group = boot.strength(data=counts,R=50,algorithm="hc")
+
+avg.boot.hc.hybrid.group <- averaged.network(boot.hc.hybrid.group, threshold=0.9)
+avg.boot.hc.dag.hybrid.group <- cextend(avg.boot.hc.hybrid.group)
+
+
+losers<-root.nodes(avg.boot.hc.hybrid.group)[root.nodes(avg.boot.hc.hybrid.group) %in% leaf.nodes(avg.boot.hc.hybrid.group)]
+notlosers<-nodes(avg.boot.hc.hybrid.group)[!(nodes(avg.boot.hc.hybrid.group) %in% root.nodes(avg.boot.hc.hybrid.group)[root.nodes(avg.boot.hc.hybrid.group) %in% leaf.nodes(avg.boot.hc.hybrid.group)])]
+
+sviz<-strength.plot(avg.boot.hc.hybrid.group,boot.hc.hybrid.group,layout="circo",shape="ellipse",highlight = list(nodes = colnames(counts)[19:28], col= "red",fill="red"),render = FALSE,groups = list(losers,notlosers),main="Bayesian Network between AMR and Bacterial Abundance")
+
+node.attrs = nodeRenderInfo(sviz)
+node.attrs$col[colnames(counts)[1:18]] <- "chocolate"
+node.attrs$fill[colnames(counts)[1:18]] <- "chocolate"
+
+node.attrs$col[losers]<-"white"
+node.attrs$fill[losers] <- "white"
+node.attrs$textCol[losers]<-"white"
+node.attrs$rWidth<-100
+node.attrs$lWidth<-100
+
+nodeRenderInfo(sviz)<-list(fontsize=45)
+nodeRenderInfo(sviz)<-node.attrs
+```
+
+```{r}
+renderGraph(sviz)
+```
+
+\textbf{Figure 10:} Bayesian Network between relative abundances of the AMR classes and the 10 most abundant genera of bacteria. AMR and bacterial genera data were derived from the same sequence data. In red are bacteria and in brown are the classes of AMR.
+
+One notable trend in this graph is that the abundance of many of the bacterial genera were correlated with Fibrobacter. Additionally, Prevotella had a direct influence on Streptomyces, Butyrivibrio, Fibrobacter, and Bacteroides. These relationships were interesting; however, the key points to note here were the edges between genera and AMR. Notably, Glycopeptide-class AMR had a direct influence on the relative abundance of Pseudomonas. Additionally, Ruminococcus has a direct influence on Tetracycline-class AMR which in turn has a direct influence on Methanobrevibacter. 
+
+\section{Conclusions:}
+
+In investigating the relationships between bacterial abundance and antimicrobial resistance as well as the design of the studies from which data was collected, it becomes clear that each of these factors influenced the others. More specifically, AMR and bacterial abundance data are notably similar across studies with the exception of Hess in which Fibrobacter was the dominant genus and Shi in which Metronidazole was the dominant class of AMR. 
+
+It was found that principal components analysis, multidimensional scaling, and tSNE all revealed similar results. The bacterial abundance data did not separate into distinct clusters except for the Hess study data. Conversely, the AMR data did cluster somewhat better with the Shi and Hess study data being distinct. This was an expected outcome due to the fact that Hess used an unusual feed for cattle [3], and Shi collected rumen samples from sheep [5]. 
+
+It was also found that tetracycline resistance was the most abundant AMR mechanism in almost all samples other than Shi study. There are two types of tetracycline resistance: tetracycline efflux and ribosomal protection [6]. Our investigation found ribosomal protection as the most commonly occurring mechanism. Interestingly, it has been found that the Bacteroides group often uses this type of resistance [6]. However, this was not reflected in our Bayesian network analysis.
+
+It’s important to note that AMR and bacterial abundance influence one another as evidenced by Bayesian network analysis. In particular, Glycopeptide resistance has a strong influence on the relative abundance of Pseudomonas. This is an interesting yet not unexpected result -- glycopeptide antibiotics are known to be effective against multi-drug resistant Gram-negative bacteria such as Pseudomonas aeruginosa [7]. Another important relationship to consider is that between Metronidazole and Tetracycline resistance. It is possible that the influence the former has on the latter is due to the fact that metronidazole-resistant bacteria are common, and, consequently, tetracyclines are used as a first-line defense [8]. 
+
+We used rumen data to investigate relationships between rumen microbiome and antimicrobial resistance genes. We found that it is possible to conclude such relationships with the use of clustering techniques and Bayesian network analysis. This type of modeling could be useful in tentative predictions of types of antibiotic treatments to avoid livestock that may be resistant. Another application is guiding the understanding of bacterial resistance to antimicrobials. More knowledge on antimicrobial resistance will allow researchers to improve human and animal health.  
+
+\section{References:}
+
+1. Pal, C., Bengtsson-Palme, J., Kristiansson, E. & Larsson, D. G. J. The structure and diversity of human, animal and environmental resistomes. Microbiome 4, 54 (2016).
+2. Stewart, R. D. et al. Assembly of 913 microbial genomes from metagenomic sequencing of the cow rumen. Nat. Commun. 9, 870 (2018).
+3. Hess, M. et al. Metagenomic discovery of biomass-degrading genes and genomes from cow rumen. Science 331, 463–467 (2011).
+4. Wallace, R. J. et al. The rumen microbial metagenome associated with high methane production in cattle. BMC Genomics 16, 839 (2015).
+5. Shi, W. et al. Methane yield phenotypes linked to differential gene expression in the sheep rumen microbiome. Genome Res. 24, 1517–1525 (2014).
+6. Speer, B., Shoemaker, N., & Salyers, A. Bacterial resistance to tetracycline: mechanisms, transfer, and clinical significance. Clin Microbiol Rev 5, 4 (1992).
+7. Yarlagadda, V. et al. Glycopeptide Antibiotic To Overcome the Intrinsic Resistance of Gram-Negative Bacteria. ACS Infect Dis 2, 2 (2016).
+8. Dailidiene, D. et al. Emergence of Tetracycline Resistance in Helicobacter pylori: Multiple Mutational Changes in 16S Ribosomal DNA and Other Genetic Loci. Mechanisms of Resistance 46, 12 (2002).
